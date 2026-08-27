@@ -41,7 +41,7 @@ db = client[DB_NAME]
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("dheeraja")
 
-app = FastAPI(title="Dheeraja Matrimony API", docs_url="/api/docs", openapi_url="/api/openapi.json")
+app = FastAPI(title="Dheeraja Matrimony API", docs_url=None, openapi_url=None, redoc_url=None)
 api = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
@@ -408,6 +408,72 @@ class SettingsUpdate(BaseModel):
     free_can_view_contacts: Optional[bool] = None
     announcement: Optional[str] = Field(default=None, max_length=300)
 
+
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import random
+
+# ==== Email Config (Aap apna Gmail yahan daal sakte hain baad mein) ====
+SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASS = os.environ.get("SMTP_PASS", "")
+
+def send_otp_email(to_email: str, otp: str):
+    if not SMTP_USER or not SMTP_PASS:
+        logger.warning("Email credentials not set. OTP is: %s", otp)
+        return
+
+    msg = MIMEMultipart()
+    msg['From'] = f"Dheeraja Matrimony <{SMTP_USER}>"
+    msg['To'] = to_email
+    msg['Subject'] = f"{otp} is your Dheeraja Verification Code"
+
+    body = f"""
+    <h2>Welcome to Dheeraja Matrimony</h2>
+    <p>Please use the following OTP to complete your registration:</p>
+    <h1 style='color: #8B1E32;'>{otp}</h1>
+    <p>If you didn't request this, please ignore this email.</p>
+    """
+    msg.attach(MIMEText(body, 'html'))
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+    except Exception as e:
+        logger.error("Failed to send email: %s", e)
+
+# ==== New OTP Routes ====
+@api.post("/auth/send-otp")
+async def send_otp(body: dict):
+    email = body.get("email", "").lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    otp = str(random.randint(100000, 999999))
+    # Store OTP in DB with 10 min expiry
+    await db.otps.update_one(
+        {"email": email},
+        {"$set": {"otp": otp, "expires_at": utcnow() + timedelta(minutes=10)}},
+        upsert=True
+    )
+    send_otp_email(email, otp)
+    return {"message": "OTP sent to email"}
+
+@api.post("/auth/verify-otp")
+async def verify_otp(body: dict):
+    email = body.get("email", "").lower()
+    otp = body.get("otp")
+
+    record = await db.otps.find_one({"email": email})
+    if not record or record["otp"] != otp or record["expires_at"] < utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+
+    await db.otps.delete_one({"email": email})
+    return {"message": "OTP verified successfully"}
 
 # ==== Startup ====
 @app.on_event("startup")

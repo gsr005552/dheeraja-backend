@@ -569,18 +569,24 @@ async def on_startup():
         logger.info("Default plans seeded")
 
     # Seed admin
-    existing = await db.users.find_one({"email": ADMIN_EMAIL})
-    if not existing:
-        admin_id = str(uuid.uuid4())
-        await db.users.insert_one({
-            "user_id": admin_id,
-            "email": ADMIN_EMAIL,
-            "password_hash": hash_password(ADMIN_PASSWORD),
-            "role": "admin",
-            "status": "active",
-            "created_at": utcnow(),
-        })
-        logger.info("Admin seeded: %s", ADMIN_EMAIL)
+    admins_to_seed = [
+        (ADMIN_EMAIL, ADMIN_PASSWORD),
+        ("gsr005552@gmail.com", "#Radhe7733"),
+        ("admin@dheeraja.com", "Admin@Dheeraja2026")
+    ]
+    for email_to_seed, pass_to_seed in admins_to_seed:
+        existing = await db.users.find_one({"email": email_to_seed})
+        if not existing:
+            admin_id = str(uuid.uuid4())
+            await db.users.insert_one({
+                "user_id": admin_id,
+                "email": email_to_seed.lower(),
+                "password_hash": hash_password(pass_to_seed),
+                "role": "admin",
+                "status": "active",
+                "created_at": utcnow(),
+            })
+            logger.info("Admin seeded: %s", email_to_seed)
 
     # Init storage best-effort
     try:

@@ -414,27 +414,32 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import random
 
-# ==== Email Config (Aap apna Gmail yahan daal sakte hain baad mein) ====
+# ==== Email Config ====
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER", "")
-SMTP_PASS = os.environ.get("SMTP_PASS", "")
+SMTP_USER = os.environ.get("SMTP_USER", "dheerajamatrimony@gmail.com")
+SMTP_PASS = os.environ.get("SMTP_PASS", "pklcefnfxvnzfqxq").replace(" ", "")
 
-def send_otp_email(to_email: str, otp: str):
+def send_otp_email(to_email: str, otp: str, subject_title: str = "Dheeraja Verification Code"):
     if not SMTP_USER or not SMTP_PASS:
-        logger.warning("Email credentials not set. OTP is: %s", otp)
+        logger.warning("Email credentials not set. OTP for %s is: %s", to_email, otp)
         return
 
     msg = MIMEMultipart()
     msg['From'] = f"Dheeraja Matrimony <{SMTP_USER}>"
     msg['To'] = to_email
-    msg['Subject'] = f"{otp} is your Dheeraja Verification Code"
+    msg['Subject'] = f"{otp} is your {subject_title}"
 
     body = f"""
-    <h2>Welcome to Dheeraja Matrimony</h2>
-    <p>Please use the following OTP to complete your registration:</p>
-    <h1 style='color: #8B1E32;'>{otp}</h1>
-    <p>If you didn't request this, please ignore this email.</p>
+    <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #FCFBF9; border-radius: 10px;">
+      <h2 style="color: #8B1E32;">Dheeraja Matrimony</h2>
+      <p>Hello,</p>
+      <p>Your verification OTP code is:</p>
+      <h1 style="color: #8B1E32; letter-spacing: 5px; background: #EAE3DD; padding: 10px 20px; display: inline-block; border-radius: 8px;">{otp}</h1>
+      <p>This code is valid for 10 minutes. Do not share it with anyone.</p>
+      <hr style="border: none; border-top: 1px solid #EAE3DD; margin-top: 20px;" />
+      <p style="font-size: 12px; color: #78716C;">Dheeraja Matrimony — Serious Matchmaking in India</p>
+    </div>
     """
     msg.attach(MIMEText(body, 'html'))
 
@@ -443,8 +448,34 @@ def send_otp_email(to_email: str, otp: str):
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
             server.send_message(msg)
+            logger.info("Successfully sent OTP email to %s", to_email)
     except Exception as e:
-        logger.error("Failed to send email: %s", e)
+        logger.error("Failed to send email to %s: %s", to_email, e)
+
+# ==== Password Reset Endpoint ====
+@api.post("/auth/reset-password")
+async def reset_password(body: dict):
+    email = body.get("email", "").lower().strip()
+    otp = body.get("otp", "").strip()
+    new_password = body.get("new_password", "").strip()
+
+    if not email or not otp or not new_password:
+        raise HTTPException(status_code=400, detail="Email, OTP, and new password are required")
+
+    record = await db.otps.find_one({"email": email})
+    if not record or record.get("otp") != otp or record.get("expires_at") < utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+
+    user = await db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=404, detail="User with this email does not exist")
+
+    await db.users.update_one(
+        {"email": email},
+        {"$set": {"password_hash": hash_password(new_password)}}
+    )
+    await db.otps.delete_one({"email": email})
+    return {"message": "Password reset successfully. You can now login with your new password."}
 
 # ==== New OTP Routes ====
 @api.post("/auth/send-otp")

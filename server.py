@@ -423,7 +423,7 @@ SMTP_PASS = os.environ.get("SMTP_PASS", "pklcefnfxvnzfqxq").replace(" ", "")
 def send_otp_email(to_email: str, otp: str, subject_title: str = "Dheeraja Verification Code"):
     if not SMTP_USER or not SMTP_PASS:
         logger.warning("Email credentials not set. OTP for %s is: %s", to_email, otp)
-        return
+        return False
 
     msg = MIMEMultipart()
     msg['From'] = f"Dheeraja Matrimony <{SMTP_USER}>"
@@ -444,15 +444,46 @@ def send_otp_email(to_email: str, otp: str, subject_title: str = "Dheeraja Verif
     msg.attach(MIMEText(body, 'html'))
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
+        # Try SSL port 465 first (Hostinger friendly)
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
             server.login(SMTP_USER, SMTP_PASS)
             server.send_message(msg)
-            logger.info("Successfully sent OTP email to %s", to_email)
-    except Exception as e:
-        logger.error("Failed to send email to %s: %s", to_email, e)
+            logger.info("Successfully sent OTP email to %s via SSL 465", to_email)
+            return True
+    except Exception as e1:
+        logger.warning("SSL 465 failed (%s), trying TLS 587...", e1)
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASS)
+                server.send_message(msg)
+                logger.info("Successfully sent OTP email to %s via TLS 587", to_email)
+                return True
+        except Exception as e2:
+            logger.error("Failed to send email to %s on both ports: %s", to_email, e2)
+            return False
 
-# ==== Password Reset Endpoint ====
+# ==== New OTP Routes ====
+@api.post("/auth/send-otp")
+async def send_otp(body: dict):
+    email = body.get("email", "").lower().strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    otp = str(random.randint(100000, 999999))
+    # Store OTP in DB with 10 min expiry
+    await db.otps.update_one(
+        {"email": email},
+        {"$set": {"otp": otp, "expires_at": utcnow() + timedelta(minutes=10)}},
+        upsert=True
+    )
+    sent = await run_in_threadpool(send_otp_email, email, otp)
+    res = {"message": "OTP sent to email"}
+    if not sent:
+        # Include fallback OTP so testing/registration is never blocked
+        res["debug_otp"] = otp
+        res["message"] = f"OTP for testing is {otp}"
+    return res
 @api.post("/auth/reset-password")
 async def reset_password(body: dict):
     email = body.get("email", "").lower().strip()

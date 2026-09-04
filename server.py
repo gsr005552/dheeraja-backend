@@ -1589,6 +1589,18 @@ async def admin_update_settings(body: SettingsUpdate, admin: dict = Depends(get_
 
 
 # ==== Health ====
+@api.get("/version")
+async def get_version():
+    """Get latest app version info for auto-update checks"""
+    return {
+        "latest_version": "1.0.1",
+        "min_version": "1.0.0",
+        "download_url": "https://dheerajamatrimony.online/downloads/app-latest.apk",
+        "release_notes": "Bug fixes and performance improvements. All 10 critical bugs fixed!",
+        "is_critical": False,  # Set True to force immediate update
+        "updated_at": "2026-09-04T15:30:00Z"
+    }
+
 @api.get("/")
 async def root():
     return {"service": "Dheeraja Matrimony API", "status": "ok"}

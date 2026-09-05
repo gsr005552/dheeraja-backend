@@ -13,7 +13,7 @@ import bcrypt
 import jwt
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Request, status, Query
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -476,6 +476,42 @@ def send_otp_email(to_email: str, otp: str, subject_title: str = "Dheeraja Verif
         except Exception as e2:
             logger.error("Failed to send email to %s on both ports: %s", to_email, e2)
             return False
+
+
+def send_email_async(to_email: str, subject: str, html_body: str):
+    if not SMTP_USER or not SMTP_PASS:
+        logger.warning("SMTP credentials not set. Skipping email to %s", to_email)
+        return False
+
+    msg = MIMEMultipart()
+    msg['From'] = f"Dheeraja Matrimony <{SMTP_USER}>"
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(html_body, 'html'))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+            logger.info("Email successfully sent to %s (Subject: %s)", to_email, subject)
+            return True
+    except Exception as e:
+        logger.error("Failed to send email to %s: %s", to_email, e)
+        return False
+
+
+def notify_admin_email(subject: str, html_body: str):
+    try:
+        run_in_threadpool(send_email_async, ADMIN_EMAIL, f"[ADMIN ALERT] {subject}", html_body)
+    except Exception as e:
+        logger.error("Failed to enqueue admin email: %s", e)
+
+
+def notify_user_email(to_email: str, subject: str, html_body: str):
+    try:
+        run_in_threadpool(send_email_async, to_email, subject, html_body)
+    except Exception as e:
+        logger.error("Failed to enqueue user email: %s", e)
 
 # ==== New OTP Routes ====
 @api.post("/auth/send-otp")
@@ -1724,6 +1760,352 @@ async def admin_update_settings(body: SettingsUpdate, admin: dict = Depends(get_
     if update:
         await db.settings.update_one({"key": "app"}, {"$set": update}, upsert=True)
     return await get_app_settings()
+
+
+WEB_ADMIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dheeraja Matrimony — Master Web Admin Portal</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #1C1315;
+      --surface: #271A1D;
+      --card: #332327;
+      --gold: #D4AF37;
+      --maroon: #7A1228;
+      --text: #FAF8F5;
+      --muted: #A39699;
+      --border: rgba(212,175,55,0.2);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
+    body { background: var(--bg); color: var(--text); padding-bottom: 50px; }
+    header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+    .brand { font-size: 20px; font-weight: 800; color: var(--gold); letter-spacing: 2px; }
+    .container { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); padding: 20px; border-radius: 12px; }
+    .stat-val { font-size: 32px; font-weight: 800; color: var(--text); margin-top: 8px; }
+    .stat-lbl { font-size: 12px; text-transform: uppercase; color: var(--muted); font-weight: 700; letter-spacing: 1px; }
+    .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--border); margin-bottom: 20px; flex-wrap: wrap; }
+    .tab { padding: 12px 20px; background: transparent; border: none; color: var(--muted); font-weight: 700; cursor: pointer; border-bottom: 3px solid transparent; font-size: 14px; }
+    .tab.active { color: var(--gold); border-bottom-color: var(--gold); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; }
+    th { color: var(--gold); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+    .btn { padding: 8px 14px; border-radius: 6px; border: none; cursor: pointer; font-weight: 700; font-size: 12px; }
+    .btn-gold { background: var(--gold); color: #1C1315; }
+    .btn-maroon { background: var(--maroon); color: #fff; }
+    .btn-danger { background: #991B1B; color: #fff; }
+    input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); margin-top: 6px; margin-bottom: 14px; }
+    .login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 100; }
+    .login-box { background: var(--surface); border: 1px solid var(--border); padding: 32px; border-radius: 16px; width: 100%; max-width: 400px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="loginModal" class="login-overlay">
+    <div class="login-box">
+      <h2 style="color: var(--gold); margin-bottom: 8px;">DHEERAJA ADMIN</h2>
+      <p style="color: var(--muted); font-size: 14px; margin-bottom: 20px;">Master PC Web Portal Login</p>
+      <input type="email" id="loginEmail" placeholder="admin@dheeraja.com" value="admin@dheeraja.com">
+      <input type="password" id="loginPassword" placeholder="Password" value="Admin@Dheeraja2026">
+      <button class="btn btn-gold" style="width: 100%; padding: 12px; font-size: 14px;" onclick="doLogin()">Login to Master Portal</button>
+      <p id="loginErr" style="color: #EF4444; font-size: 13px; margin-top: 12px;"></p>
+    </div>
+  </div>
+
+  <header>
+    <div class="brand">👑 DHEERAJA MASTER ADMIN</div>
+    <div>
+      <span id="adminName" style="margin-right: 16px; font-size: 14px; color: var(--gold);">Admin Portal</span>
+      <button class="btn btn-danger" onclick="logout()">Logout</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-lbl">Total Members</div>
+        <div class="stat-val" id="statMembers">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-lbl">Active Subscriptions</div>
+        <div class="stat-val" id="statSubs" style="color: #10B981;">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-lbl">Pending Verify</div>
+        <div class="stat-val" id="statVerify" style="color: var(--gold);">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-lbl">User Reports</div>
+        <div class="stat-val" id="statReports" style="color: #EF4444;">0</div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('members')">Members CRM</button>
+      <button class="tab" onclick="switchTab('plans')">VIP Plans</button>
+      <button class="tab" onclick="switchTab('vouchers')">Promo Vouchers</button>
+      <button class="tab" onclick="switchTab('subscriptions')">Assign Subscriptions</button>
+      <button class="tab" onclick="switchTab('settings')">Master Settings</button>
+    </div>
+
+    <!-- Members Tab -->
+    <div id="tab-members" class="tab-content">
+      <div class="card">
+        <h3>Member Directory CRM</h3>
+        <input type="text" id="memberSearch" placeholder="Search by Name, Email, or Profile ID..." onkeyup="loadMembers()" style="margin-top: 12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Profile ID</th>
+              <th>Full Name</th>
+              <th>Email</th>
+              <th>Status</th>
+              <th>Verified</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="membersTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Plans Tab -->
+    <div id="tab-plans" class="tab-content" style="display: none;">
+      <div class="card">
+        <h3>VIP Subscription Plans</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Plan Name</th>
+              <th>Price</th>
+              <th>Validity</th>
+              <th>Interests/Mo</th>
+              <th>Contacts Access</th>
+              <th>Badge</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="plansTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Vouchers Tab -->
+    <div id="tab-vouchers" class="tab-content" style="display: none;">
+      <div class="card">
+        <h3>Promo & Gift Codes Engine</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 12px;">
+          <div><label>Voucher Code</label><input type="text" id="vCode" placeholder="e.g. WELCOME50"></div>
+          <div><label>Plan ID</label><input type="text" id="vPlanId" placeholder="gold"></div>
+          <div><label>Max Uses</label><input type="number" id="vMaxUses" value="100"></div>
+        </div>
+        <button class="btn btn-gold" onclick="createVoucher()">Create Voucher</button>
+        <table style="margin-top: 20px;">
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Plan</th>
+              <th>Used</th>
+              <th>Max Uses</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="vouchersTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Subscriptions Tab -->
+    <div id="tab-subscriptions" class="tab-content" style="display: none;">
+      <div class="card">
+        <h3>Manual Subscription Assignment</h3>
+        <div><label>User ID</label><input type="text" id="subUserId" placeholder="Paste User ID"></div>
+        <div><label>Plan ID</label><input type="text" id="subPlanId" placeholder="gold"></div>
+        <div><label>Duration (Days)</label><input type="number" id="subDuration" value="90"></div>
+        <button class="btn btn-gold" onclick="assignSubscription()">Assign Plan To Member</button>
+      </div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div id="tab-settings" class="tab-content" style="display: none;">
+      <div class="card">
+        <h3>Master Control & System Settings</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-top: 16px;">
+          <div><label>App Name</label><input type="text" id="setAppName"></div>
+          <div><label>Tagline</label><input type="text" id="setTagline"></div>
+          <div><label>Support Email</label><input type="text" id="setSupportEmail"></div>
+          <div><label>Support Phone</label><input type="text" id="setSupportPhone"></div>
+          <div><label>UPI Payment ID</label><input type="text" id="setUpiId"></div>
+          <div>
+            <label>Launch Free Mode (All Features Free)</label>
+            <select id="setFreeMode"><option value="true">ENABLED (ON)</option><option value="false">DISABLED (OFF)</option></select>
+          </div>
+        </div>
+        <button class="btn btn-gold" style="margin-top: 16px;" onclick="saveSettings()">Save System Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let token = localStorage.getItem('dm_admin_token');
+    if (token) { document.getElementById('loginModal').style.display = 'none'; loadDashboard(); }
+
+    async function req(path, method = 'GET', body = null) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(`/api${path}`, { method, headers, body: body ? JSON.stringify(body) : null });
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json();
+    }
+
+    async function doLogin() {
+      const email = document.getElementById('loginEmail').value;
+      const password = document.getElementById('loginPassword').value;
+      try {
+        const data = await req('/auth/login', 'POST', { email, password });
+        if (data.user.role !== 'admin') throw new Error('Admin access required');
+        token = data.token;
+        localStorage.setItem('dm_admin_token', token);
+        document.getElementById('loginModal').style.display = 'none';
+        loadDashboard();
+      } catch (e) {
+        document.getElementById('loginErr').innerText = e.message || 'Login failed';
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem('dm_admin_token');
+      location.reload();
+    }
+
+    function switchTab(t) {
+      document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(d => d.style.display = 'none');
+      event.target.classList.add('active');
+      document.getElementById(`tab-${t}`).style.display = 'block';
+    }
+
+    async function loadDashboard() {
+      try {
+        const stats = await req('/admin/stats');
+        document.getElementById('statMembers').innerText = stats.users || 0;
+        document.getElementById('statSubs').innerText = stats.active_subscriptions || 0;
+        document.getElementById('statVerify').innerText = stats.verify_requests_pending || 0;
+        document.getElementById('statReports').innerText = stats.reports_pending || 0;
+        loadMembers();
+        loadPlans();
+        loadVouchers();
+        loadSettings();
+      } catch (e) { console.error(e); }
+    }
+
+    async function loadMembers() {
+      const q = document.getElementById('memberSearch').value;
+      const data = await req(`/admin/members?q=${encodeURIComponent(q)}`);
+      const tb = document.getElementById('membersTable');
+      tb.innerHTML = (data.items || []).map(m => `
+        <tr>
+          <td><b>${m.profile_id}</b></td>
+          <td>${m.full_name}</td>
+          <td>${m.email}</td>
+          <td>${m.status || 'Active'}</td>
+          <td>${m.verified ? '✅ Yes' : '❌ No'}</td>
+          <td>
+            <button class="btn btn-gold" onclick="memberAction('${m.user_id}', 'verify_approve')">Verify Badge</button>
+            <button class="btn btn-maroon" onclick="memberAction('${m.user_id}', 'suspend')">Suspend</button>
+            <button class="btn btn-danger" onclick="memberAction('${m.user_id}', 'delete')">Delete</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function memberAction(uid, action) {
+      if (!confirm(`Apply ${action} to member?`)) return;
+      await req(`/admin/members/${uid}/action`, 'POST', { action });
+      loadMembers();
+    }
+
+    async function loadPlans() {
+      const data = await req('/admin/plans');
+      document.getElementById('plansTable').innerHTML = (data.items || []).map(p => `
+        <tr>
+          <td><b>${p.name}</b></td>
+          <td>₹${p.price}</td>
+          <td>${p.duration_days} days</td>
+          <td>${p.features?.interests_per_month === -1 ? 'Unlimited' : p.features?.interests_per_month}</td>
+          <td>${p.features?.can_view_contacts ? 'Yes' : 'No'}</td>
+          <td>${p.features?.badge || '—'}</td>
+          <td><button class="btn btn-danger" onclick="req('/admin/plans/${p.plan_id}', 'DELETE').then(loadPlans)">Delete</button></td>
+        </tr>
+      `).join('');
+    }
+
+    async function loadVouchers() {
+      const data = await req('/admin/vouchers');
+      document.getElementById('vouchersTable').innerHTML = (data.items || []).map(v => `
+        <tr>
+          <td><b>${v.code}</b></td>
+          <td>${v.plan_name || v.plan_id}</td>
+          <td>${v.used_count || 0}</td>
+          <td>${v.max_uses}</td>
+          <td>${v.active ? 'Active' : 'Expired'}</td>
+          <td><button class="btn btn-danger" onclick="req('/admin/vouchers/${v.code}', 'DELETE').then(loadVouchers)">Deactivate</button></td>
+        </tr>
+      `).join('');
+    }
+
+    async function createVoucher() {
+      const code = document.getElementById('vCode').value;
+      const plan_id = document.getElementById('vPlanId').value;
+      const max_uses = parseInt(document.getElementById('vMaxUses').value);
+      await req('/admin/vouchers', 'POST', { code, plan_id, max_uses });
+      loadVouchers();
+    }
+
+    async function assignSubscription() {
+      const user_id = document.getElementById('subUserId').value;
+      const plan_id = document.getElementById('subPlanId').value;
+      const duration_days = parseInt(document.getElementById('subDuration').value);
+      await req('/admin/subscriptions/assign', 'POST', { user_id, plan_id, duration_days });
+      alert('Subscription Assigned Successfully!');
+    }
+
+    async function loadSettings() {
+      const s = await req('/admin/settings');
+      document.getElementById('setAppName').value = s.app_name || '';
+      document.getElementById('setTagline').value = s.tagline || '';
+      document.getElementById('setSupportEmail').value = s.support_email || '';
+      document.getElementById('setSupportPhone').value = s.support_phone || '';
+      document.getElementById('setUpiId').value = s.upi_id || '';
+      document.getElementById('setFreeMode').value = String(!!s.free_mode);
+    }
+
+    async function saveSettings() {
+      const body = {
+        app_name: document.getElementById('setAppName').value,
+        tagline: document.getElementById('setTagline').value,
+        support_email: document.getElementById('setSupportEmail').value,
+        support_phone: document.getElementById('setSupportPhone').value,
+        upi_id: document.getElementById('setUpiId').value,
+        free_mode: document.getElementById('setFreeMode').value === 'true',
+      };
+      await req('/admin/settings', 'PUT', body);
+      alert('Settings Saved Successfully!');
+    }
+  </script>
+</body>
+</html>"""
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def web_admin_portal():
+    return HTMLResponse(content=WEB_ADMIN_HTML)
 
 
 @api.get("/version")

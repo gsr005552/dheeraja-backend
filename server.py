@@ -31,7 +31,7 @@ DB_NAME = os.environ['DB_NAME']
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = os.environ.get('JWT_ALGORITHM', 'HS256')
 JWT_EXPIRE_MINUTES = int(os.environ.get('JWT_EXPIRE_MINUTES', '10080'))
-ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@dheeraja.com')
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'dheerajamatrimony@gmail.com')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Admin@Dheeraja2026')
 ADMIN_NAME = os.environ.get('ADMIN_NAME', 'Dheeraja Admin')
 
@@ -430,9 +430,9 @@ import random
 
 # ==== Email Config ====
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
 SMTP_USER = os.environ.get("SMTP_USER", "dheerajamatrimony@gmail.com")
-SMTP_PASS = os.environ.get("SMTP_PASS", "pklcefnfxvnzfqxq").replace(" ", "")
+SMTP_PASS = os.environ.get("SMTP_PASS", "cxcogqwvsyezmjxa").replace(" ", "")
 
 def send_otp_email(to_email: str, otp: str, subject_title: str = "Dheeraja Verification Code"):
     if not SMTP_USER or not SMTP_PASS:

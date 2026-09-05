@@ -1,75 +1,40 @@
-"""Emergent Managed Object Storage client."""
+"""Local Disk Storage Client for VPS (Replaces Emergent Storage)."""
 import os
-import requests
+from pathlib import Path
 from typing import Tuple
 
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
-APP_NAME = os.environ.get("APP_NAME", "dheeraja-matrimony")
-
-_storage_key = None
-
-
-def _reset():
-    global _storage_key
-    _storage_key = None
-
+# VPS path where images will be stored
+UPLOAD_DIR = Path("/var/www/dheeraja/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 def init_storage() -> str:
-    global _storage_key
-    if _storage_key:
-        return _storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    _storage_key = resp.json()["storage_key"]
-    return _storage_key
-
+    # No remote init needed for local storage
+    return "local"
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    try:
-        resp = requests.put(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key, "Content-Type": content_type},
-            data=data,
-            timeout=120,
-        )
-        if resp.status_code == 503:
-            _reset()
-            key = init_storage()
-            resp = requests.put(
-                f"{STORAGE_URL}/objects/{path}",
-                headers={"X-Storage-Key": key, "Content-Type": content_type},
-                data=data,
-                timeout=120,
-            )
-        resp.raise_for_status()
-        return resp.json()
-    except requests.HTTPError as e:
-        raise e
+    file_path = UPLOAD_DIR / path
+    file_path.parent.mkdir(parents=True, exist_ok=True)
 
+    with open(file_path, "wb") as f:
+        f.write(data)
+
+    return {"status": "success", "path": path}
 
 def get_object(path: str) -> Tuple[bytes, str]:
-    key = init_storage()
-    resp = requests.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key},
-        timeout=60,
-    )
-    if resp.status_code == 503:
-        _reset()
-        key = init_storage()
-        resp = requests.get(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key},
-            timeout=60,
-        )
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    file_path = UPLOAD_DIR / path
+    if not file_path.exists():
+        raise FileNotFoundError("Image not found")
 
+    with open(file_path, "rb") as f:
+        content = f.read()
+
+    # Guess content type based on extension
+    ext = file_path.suffix.lower()
+    ctype = "image/jpeg" if ext in [".jpg", ".jpeg"] else "image/png"
+
+    return content, ctype
 
 def build_path(user_id: str, ext: str) -> str:
     import uuid
     ext = (ext or "jpg").lstrip(".").lower()
-    return f"{APP_NAME}/uploads/{user_id}/{uuid.uuid4().hex}.{ext}"
+    return f"uploads/{user_id}/{uuid.uuid4().hex}.{ext}"
